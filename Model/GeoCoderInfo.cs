@@ -19,6 +19,18 @@ namespace WeatherBot.Model
             Latitude = latitude;
         }
 
-        public string GetDisplay() => $"Город: {Name} ({Latitude.ToString().Replace(',', '.')}, {Longitude.ToString().Replace(',', '.')})";
+        public string GetDisplay() => $"{Name} ({BeautyLatitude(Latitude)} {BeautyLongitude(Longitude)})";
+
+        public static string BeautyLatitude(double coordinate) => $"{(coordinate >= 0 ? "N" : "S")}{BeautyCoordinate(coordinate)}";
+        public static string BeautyLongitude(double coordinate) => $"{(coordinate >= 0 ? "E" : "W")}{BeautyCoordinate(coordinate)}";
+        public static string BeautyCoordinate(double coordinate)
+        {
+            int degrees = (int)coordinate;
+            double minutesAndSeconds = Math.Abs(coordinate - degrees) * 60;
+            int minutes = (int)minutesAndSeconds;
+            double seconds = (minutesAndSeconds - minutes) * 60;
+
+            return $"{Math.Abs(degrees)}°{minutes:00}'{seconds:00.00}''";
+        }
     }
 }

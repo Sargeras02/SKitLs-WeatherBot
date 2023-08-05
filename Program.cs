@@ -120,6 +120,7 @@ namespace WeatherBot
             return new OutputMessageText(message);
         }
 
+        private static async Task<string> GetWeatherInfo(GeoCoderInfo geo) => await GetWeatherInfo(geo.Latitude, geo.Longitude);
         private static async Task<string> GetWeatherInfo(double latitude, double longitude)
         {
             var resultMessage = string.Empty;
@@ -222,7 +223,7 @@ namespace WeatherBot
                 var menu = new PairedInlineMenu(update.Owner);
                 menu.Add(UnfollowGeocode, new IntWrapper(user.Favs.FindIndex(x => x.Name == args.Name)));
                 menu.Add("Назад", update.Owner.ResolveService<IMenuManager>().BackCallback);
-                var message = new OutputMessageText(update.Message.Text + "\n\n" + await GetWeatherInfo(args.Latitude, args.Longitude))
+                var message = new OutputMessageText(update.Message.Text + "\n\n" + await GetWeatherInfo(args))
                 {
                     Menu = menu,
                 };
@@ -273,22 +274,24 @@ namespace WeatherBot
                 }
             }
 
-            var resultMessage = $"Погода в запрошенном месте: {cityName} ({latitude.ToString().Replace(',', '.')}, {longitude.ToString().Replace(',', '.')})\n\n";
+            var place = new GeoCoderInfo(cityName, longitude, latitude);
+            var resultMessage = $"Погода в запрошенном месте:\n{place.GetDisplay()}\n\n";
 
             if (RequestApi)
             {
-                resultMessage += await GetWeatherInfo(latitude, longitude);
+                resultMessage += await GetWeatherInfo(place);
             }
 
             var menu = new PairedInlineMenu(update.Owner);
             menu.Add(FollowGeocode, new(cityName, longitude, latitude));
+
+            var resp = await update.Owner.Bot.SendLocationAsync(update.ChatId, latitude, longitude);
             var message = new OutputMessageText(resultMessage)
             {
                 Menu = menu,
+                ReplyToMessageId = resp.MessageId
             };
-
-            var resp = await update.Owner.DeliveryService.ReplyToSender(message, update);
-            await update.Owner.Bot.SendLocationAsync(update.ChatId, latitude, longitude, replyToMessageId: resp.Message?.MessageId);
+            await update.Owner.DeliveryService.ReplyToSender(message, update);
         }
 
         private static DefaultCommand StartCommand => new("start", Do_StartAsync);
