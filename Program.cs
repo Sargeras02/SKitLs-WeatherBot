@@ -6,8 +6,9 @@ using SKitLs.Bots.Telegram.AdvancedMessages.Model.Menus;
 using SKitLs.Bots.Telegram.AdvancedMessages.Model.Messages;
 using SKitLs.Bots.Telegram.AdvancedMessages.Model.Messages.Text;
 using SKitLs.Bots.Telegram.AdvancedMessages.Prototype;
-using SKitLs.Bots.Telegram.ArgedInteractions.Argumentation;
+using SKitLs.Bots.Telegram.ArgedInteractions.Argumenting;
 using SKitLs.Bots.Telegram.ArgedInteractions.Interactions.Model;
+using SKitLs.Bots.Telegram.Core.external.Localizations;
 using SKitLs.Bots.Telegram.Core.Model.Building;
 using SKitLs.Bots.Telegram.Core.Model.Interactions;
 using SKitLs.Bots.Telegram.Core.Model.Interactions.Defaults;
@@ -19,9 +20,7 @@ using SKitLs.Bots.Telegram.PageNavs;
 using SKitLs.Bots.Telegram.PageNavs.Model;
 using SKitLs.Bots.Telegram.Stateful.Model;
 using SKitLs.Bots.Telegram.Stateful.Prototype;
-using SKitLs.Utils.Localizations.Prototype;
 using System.Globalization;
-using Telegram.Bot;
 using WeatherBot.Extensions;
 using WeatherBot.Model;
 using WeatherBot.Users;
@@ -31,10 +30,10 @@ namespace WeatherBot
     internal class Program
     {
         private static readonly bool RequestApi = true;
-        private static readonly string GeocoderApiKey = "1b28a350-f39b-459c-9911-f6fb693f4e64";
-        private static readonly string WeatherApiKey = "c7e4e7f4-26ab-4a1e-8b43-7a171bf0aac0";
+        private static readonly string GeocoderApiKey = "geoApi";
+        private static readonly string WeatherApiKey = "weatherApi";
 
-        private static readonly string BotApiKey = "1884746031:AAF_JtOS882Uz33IXlNtpyyQUoLTGSkvP9I";
+        private static readonly string BotApiKey = "botApi";
 
         public static DefaultUserState DefaultState = new(0, "default");
         public static DefaultUserState InputCityState = new(10, "typing");
@@ -71,7 +70,7 @@ namespace WeatherBot
             privateCallbacks.CallbackManager.AddSafely(UnfollowGeocode);
             privateCallbacks.CallbackManager.AddSafely(OpenFollow);
             privateCallbacks.CallbackManager.AddSafely(LoadWeather);
-            mm.ApplyTo(privateCallbacks.CallbackManager);
+            mm.ApplyFor(privateCallbacks.CallbackManager);
 
             ChatDesigner privates = ChatDesigner.NewDesigner()
                 .UseUsersManager(new UserManager())
@@ -80,9 +79,9 @@ namespace WeatherBot
 
             await BotBuilder.NewBuilder(BotApiKey)
                 .EnablePrivates(privates)
-                .AddService<IArgsSerializeService>(new DefaultArgsSerializeService())
+                .AddService<IArgsSerilalizerService>(new DefaultArgsSerilalizerService())
                 .AddService<IMenuManager>(mm)
-                .CustomDelivery(new AdvancedDeliverySystem())
+                .CustomDelievery(new AdvancedDeliverySystem())
                 .Build()
                 .Listen();
         }
@@ -169,7 +168,7 @@ namespace WeatherBot
                 {
                     Menu = new ReplyMenu(ExitInput.ActionNameBase),
                 };
-                await update.Owner.DeliveryService.ReplyToSender(new EditWrapper(message, update.TriggerMessageId), update);
+                await update.Owner.DeliveryService.ReplyToSender(message, update);
             }
         }
         private static BotArgedCallback<GeoCoderInfo> FollowGeocode => new(new LabeledData("В избранное", "FollowGeocode"), Do_FollowGeocodeAsync);
@@ -178,8 +177,11 @@ namespace WeatherBot
             if (update.Sender is BotUser user)
             {
                 user.Favs.Add(args);
-                await update.Owner.Bot.EditMessageReplyMarkupAsync(update.ChatId, update.TriggerMessageId, null);
-                await update.Owner.Bot.AnswerCallbackQueryAsync(update.Callback.Id, "Город сохранён в избранное!", showAlert: false);
+                var message = new OutputMessageText(update.Message.Text + $"\n\nГород сохранён в избранное!")
+                {
+                    Menu = null,
+                };
+                await update.Owner.DeliveryService.ReplyToSender(new EditWrapper(message, update.TriggerMessageId), update);
             }
         }
         private static BotArgedCallback<IntWrapper> UnfollowGeocode => new(new LabeledData("Удалить", "UnfollowGeocode"), Do_UnfollowGeocodeAsync);
@@ -203,7 +205,10 @@ namespace WeatherBot
         {
             if (update.Sender is BotUser user)
             {
-                var menu = new PairedInlineMenu(update.Owner);
+                var menu = new PairedInlineMenu()
+                {
+                    Serializer = update.Owner.ResolveService<IArgsSerilalizerService>()
+                };
                 menu.Add(UnfollowGeocode, new IntWrapper(user.Favs.FindIndex(x => x.Name == args.Name)));
                 menu.Add(LoadWeather, args);
                 menu.Add("Назад", update.Owner.ResolveService<IMenuManager>().BackCallback);
@@ -219,7 +224,10 @@ namespace WeatherBot
         {
             if (update.Sender is BotUser user)
             {
-                var menu = new PairedInlineMenu(update.Owner);
+                var menu = new PairedInlineMenu()
+                {
+                    Serializer = update.Owner.ResolveService<IArgsSerilalizerService>()
+                };
                 menu.Add(UnfollowGeocode, new IntWrapper(user.Favs.FindIndex(x => x.Name == args.Name)));
                 menu.Add("Назад", update.Owner.ResolveService<IMenuManager>().BackCallback);
                 var message = new OutputMessageText(update.Message.Text + "\n\n" + await GetWeatherInfo(args.Latitude, args.Longitude))
@@ -257,7 +265,7 @@ namespace WeatherBot
                 using (var httpClient = new HttpClient())
                 {
                     string responseString = await httpClient.GetStringAsync(geocoderApiUrl);
-                    Console.WriteLine(responseString[..100]);
+                    Console.WriteLine(responseString);
                     var response = JsonConvert.DeserializeObject<GeoCodeWrap>(responseString);
                     cityName = response?.Response?.GeoObjectCollection?.FeatureMember?[0]?.GeoObject?.Name ?? update.Text;
                     string? pos = response?.Response?.GeoObjectCollection?.FeatureMember?[0]?.GeoObject?.Point?.pos;
@@ -280,15 +288,16 @@ namespace WeatherBot
                 resultMessage += await GetWeatherInfo(latitude, longitude);
             }
 
-            var menu = new PairedInlineMenu(update.Owner);
+            var menu = new PairedInlineMenu()
+            {
+                Serializer = update.Owner.ResolveService<IArgsSerilalizerService>()
+            };
             menu.Add(FollowGeocode, new(cityName, longitude, latitude));
             var message = new OutputMessageText(resultMessage)
             {
                 Menu = menu,
             };
-
-            var resp = await update.Owner.DeliveryService.ReplyToSender(message, update);
-            await update.Owner.Bot.SendLocationAsync(update.ChatId, latitude, longitude, replyToMessageId: resp.Message?.MessageId);
+            await update.Owner.DeliveryService.ReplyToSender(message, update);
         }
 
         private static DefaultCommand StartCommand => new("start", Do_StartAsync);

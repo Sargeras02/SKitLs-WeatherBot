@@ -1,4 +1,4 @@
-﻿using SKitLs.Bots.Telegram.ArgedInteractions.Argumentation.Prototype;
+﻿using SKitLs.Bots.Telegram.ArgedInteractions.Argumenting.Prototype;
 
 namespace WeatherBot.Model
 {
