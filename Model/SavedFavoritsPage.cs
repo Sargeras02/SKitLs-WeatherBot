@@ -1,5 +1,6 @@
 ﻿using SKitLs.Bots.Telegram.AdvancedMessages.Model.Menus;
 using SKitLs.Bots.Telegram.AdvancedMessages.Prototype;
+using SKitLs.Bots.Telegram.ArgedInteractions.Argumenting;
 using SKitLs.Bots.Telegram.ArgedInteractions.Interactions.Model;
 using SKitLs.Bots.Telegram.Core.Model.UpdatesCasting;
 using SKitLs.Bots.Telegram.PageNavs;
@@ -21,7 +22,10 @@ namespace WeatherBot.Model
         {
             IMenuManager mm = update.Owner.ResolveService<IMenuManager>();
 
-            var res = new PairedInlineMenu(update.Owner);
+            var res = new PairedInlineMenu()
+            {
+                Serializer = update.Owner.ResolveService<IArgsSerilalizerService>(),
+            };
 
             if (update.Sender is BotUser user)
             {
@@ -31,7 +35,7 @@ namespace WeatherBot.Model
                 }
             }
 
-            if (previous is not null)
+            if (previous != null)
             {
                 res.Add("Назад", mm.BackCallback, singleLine: true);
             }
