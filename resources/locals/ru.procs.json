@@ -1,0 +1,15 @@
+{
+  "procs.display.ConfirmDefaultMessage": "Вы уверены, что хотите выполнить это действие?",
+  "procs.display.ConfirmYes": "Да",
+  "procs.display.ConfirmNo": "Нет",
+
+  // External
+  "procs.exceptionCap.NoState": "State is not defined",
+  "procs.exceptionMes.NoState": "Process with id {0} does not define any state.",
+
+  // Inexternal
+  "procs.exceptionCap.NoRunning": "Process is not running",
+  "procs.exceptionMes.NoRunning": "Process with id {0} is not being run for user {1}."
+
+  // Internal
+}

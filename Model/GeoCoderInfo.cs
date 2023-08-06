@@ -1,9 +1,13 @@
 ﻿using SKitLs.Bots.Telegram.ArgedInteractions.Argumentation.Prototype;
+using SKitLs.Bots.Telegram.DataBases.Prototype;
 
 namespace WeatherBot.Model
 {
-    internal class GeoCoderInfo
+    internal class GeoCoderInfo : IBotDisplayable, IOwnedData
     {
+        public long BotArgId { get; set; }
+        public void UpdateId(long id) => BotArgId = id;
+
         [BotActionArgument(0)]
         public string Name { get; set; } = null!;
         [BotActionArgument(1)]
@@ -19,6 +23,12 @@ namespace WeatherBot.Model
             Latitude = latitude;
         }
 
+        public List<long> Owners { get; } = new();
+        public bool IsOwnedBy(long userId) => Owners.Contains(userId);
+
+        public string ListDisplay() => Name;
+        public string ListLabel() => Name;
+        public string FullDisplay(params string[] args) => GetDisplay();
         public string GetDisplay() => $"{Name} ({BeautyLatitude(Latitude)} {BeautyLongitude(Longitude)})";
 
         public static string BeautyLatitude(double coordinate) => $"{(coordinate >= 0 ? "N" : "S")}{BeautyCoordinate(coordinate)}";

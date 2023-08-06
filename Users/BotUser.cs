@@ -1,4 +1,6 @@
-﻿using SKitLs.Bots.Telegram.Stateful.Model;
+﻿using SKitLs.Bots.Telegram.Core.Model.UpdatesCasting;
+using SKitLs.Bots.Telegram.DataBases;
+using SKitLs.Bots.Telegram.Stateful.Model;
 using SKitLs.Bots.Telegram.Stateful.Prototype;
 using WeatherBot.Model;
 
@@ -6,7 +8,7 @@ namespace WeatherBot.Users
 {
     internal class BotUser : IStatefulUser
     {
-        public List<GeoCoderInfo> Favs { get; } = new();
+        //public List<GeoCoderInfo> Favs { get; } = new();
 
         public IUserState State { get; set; }
         public long TelegramId { get; set; }
@@ -18,5 +20,10 @@ namespace WeatherBot.Users
         }
 
         public void ResetState() => State = new DefaultUserState();
+
+        public List<GeoCoderInfo> GetFavorites(ICastedUpdate update) => update.Owner
+            .ResolveService<IDataManager>()
+            .GetSet<GeoCoderInfo>()
+            .GetUserSubset(TelegramId);
     }
 }

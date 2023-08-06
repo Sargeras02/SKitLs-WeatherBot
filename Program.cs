@@ -8,6 +8,10 @@ using SKitLs.Bots.Telegram.AdvancedMessages.Model.Messages.Text;
 using SKitLs.Bots.Telegram.AdvancedMessages.Prototype;
 using SKitLs.Bots.Telegram.ArgedInteractions.Argumentation;
 using SKitLs.Bots.Telegram.ArgedInteractions.Interactions.Model;
+using SKitLs.Bots.Telegram.BotProcesses.Model;
+using SKitLs.Bots.Telegram.BotProcesses.Model.Defaults;
+using SKitLs.Bots.Telegram.BotProcesses.Model.Defaults.Processes.Util;
+using SKitLs.Bots.Telegram.BotProcesses.Prototype;
 using SKitLs.Bots.Telegram.Core.Model.Building;
 using SKitLs.Bots.Telegram.Core.Model.Interactions;
 using SKitLs.Bots.Telegram.Core.Model.Interactions.Defaults;
@@ -15,12 +19,17 @@ using SKitLs.Bots.Telegram.Core.Model.Management.Defaults;
 using SKitLs.Bots.Telegram.Core.Model.UpdateHandlers.Defaults;
 using SKitLs.Bots.Telegram.Core.Model.UpdatesCasting;
 using SKitLs.Bots.Telegram.Core.Model.UpdatesCasting.Signed;
+using SKitLs.Bots.Telegram.DataBases;
+using SKitLs.Bots.Telegram.DataBases.Model;
+using SKitLs.Bots.Telegram.DataBases.Model.Args;
+using SKitLs.Bots.Telegram.DataBases.Model.Datasets;
 using SKitLs.Bots.Telegram.PageNavs;
 using SKitLs.Bots.Telegram.PageNavs.Model;
 using SKitLs.Bots.Telegram.Stateful.Model;
 using SKitLs.Bots.Telegram.Stateful.Prototype;
 using SKitLs.Utils.Localizations.Prototype;
 using System.Globalization;
+using System.Net.Sockets;
 using Telegram.Bot;
 using WeatherBot.Extensions;
 using WeatherBot.Model;
@@ -31,10 +40,10 @@ namespace WeatherBot
     internal class Program
     {
         private static readonly bool RequestApi = true;
-        private static readonly string GeocoderApiKey = "1b28a350-f39b-459c-9911-f6fb693f4e64";
-        private static readonly string WeatherApiKey = "c7e4e7f4-26ab-4a1e-8b43-7a171bf0aac0";
+        private static readonly string GeocoderApiKey = "geoKey";
+        private static readonly string WeatherApiKey = "weatherKey";
 
-        private static readonly string BotApiKey = "1884746031:AAF_JtOS882Uz33IXlNtpyyQUoLTGSkvP9I";
+        private static readonly string BotApiKey = "botKey";
 
         public static DefaultUserState DefaultState = new(0, "default");
         public static DefaultUserState InputCityState = new(10, "typing");
@@ -43,6 +52,9 @@ namespace WeatherBot
         {
             BotBuilder.DebugSettings.DebugLanguage = LangKey.RU;
             BotBuilder.DebugSettings.UpdateLocalsPath("resources/locals");
+
+            var dataManager = GetDataManager();
+            var mm = GetMenuManager(dataManager);
 
             var privateMessages = new DefaultSignedMessageUpdateHandler();
             var statefulInputs = new DefaultStatefulManager<SignedMessageTextUpdate>();
@@ -61,14 +73,14 @@ namespace WeatherBot
             
             privateMessages.TextMessageUpdateHandler = privateTexts;
 
-            var mm = GetMenuManager();
+            var statefulCallbacks = new DefaultStatefulManager<SignedCallbackUpdate>();
             var privateCallbacks = new DefaultCallbackHandler()
             {
-                CallbackManager = new DefaultActionManager<SignedCallbackUpdate>(),
+                CallbackManager = statefulCallbacks,
             };
             privateCallbacks.CallbackManager.AddSafely(StartSearching);
             privateCallbacks.CallbackManager.AddSafely(FollowGeocode);
-            privateCallbacks.CallbackManager.AddSafely(UnfollowGeocode);
+            //privateCallbacks.CallbackManager.AddSafely(UnfollowGeocode);
             privateCallbacks.CallbackManager.AddSafely(OpenFollow);
             privateCallbacks.CallbackManager.AddSafely(LoadWeather);
             mm.ApplyTo(privateCallbacks.CallbackManager);
@@ -78,16 +90,41 @@ namespace WeatherBot
                 .UseMessageHandler(privateMessages)
                 .UseCallbackHandler(privateCallbacks);
 
-            await BotBuilder.NewBuilder(BotApiKey)
+            var bot = BotBuilder.NewBuilder(BotApiKey)
                 .EnablePrivates(privates)
                 .AddService<IArgsSerializeService>(new DefaultArgsSerializeService())
                 .AddService<IMenuManager>(mm)
+                .AddService<IProcessManager>(new DefaultProcessManager())
+                .AddService<IDataManager>(dataManager)
                 .CustomDelivery(new AdvancedDeliverySystem())
-                .Build()
-                .Listen();
+                .Build();
+
+            dataManager.ApplyTo(statefulInputs);
+            dataManager.ApplyTo(statefulCallbacks);
+            bot.Settings.BotLanguage = LangKey.RU;
+
+            await bot.Listen();
         }
 
-        private static IMenuManager GetMenuManager()
+        #region Setup
+        private static IDataManager GetDataManager()
+        {
+            var dm = new DefaultDataManager("Избранное [DM]");
+
+            var favsId = "favs";
+            var favorites = new UserContextDataSet<GeoCoderInfo>(favsId, LoadFromJson<GeoCoderInfo>(favsId).Result, dsLabel: "Города");
+            favorites.Properties.AllowAdd = false;
+            favorites.Properties.AllowEdit = false;
+            favorites.UpdateProcess(RemoveWithUnfollow, DbActionType.Remove);
+            favorites.AddAction(LoadWeather);
+            favorites.ObjectAdded += (i, u) => SaveDataToJson(favorites.GetAll(), favsId);
+            favorites.ObjectUpdated += (i, u) => SaveDataToJson(favorites.GetAll(), favsId);
+            favorites.ObjectRemoved += (i, u) => SaveDataToJson(favorites.GetAll(), favsId);
+            dm.AddAsync(favorites);
+
+            return dm;
+        }
+        private static IMenuManager GetMenuManager(IDataManager dm)
         {
             var mm = new DefaultMenuManager();
 
@@ -99,11 +136,13 @@ namespace WeatherBot
             var savedPage = new WidgetPage("saved", "Избранное", savedBody, new SavedFavoriteMenu(OpenFollow));
 
             mainMenu.PathTo(savedPage);
+            mainMenu.PathTo(dm.GetRootPage());
             mainMenu.AddAction(StartSearching);
 
             mm.Define(mainPage);
             mm.Define(savedPage);
 
+            dm.ApplyTo(mm);
             return mm;
         }
         private static IOutputMessage GetSavedList(ISignedUpdate? update)
@@ -111,15 +150,18 @@ namespace WeatherBot
             var message = "Избранное:\n\n";
             if (update is not null && update.Sender is BotUser user)
             {
-                if (user.Favs.Count == 0) message += "Ничего нет";
-                foreach (var favorite in user.Favs)
+                var favs = user.GetFavorites(update);
+                if (favs.Count == 0) message += "Ничего нет";
+                foreach (var favorite in favs)
                 {
                     message += $"- {favorite.Name}\n";
                 }
             }
             return new OutputMessageText(message);
         }
+        #endregion
 
+        #region Methods
         private static async Task<string> GetWeatherInfo(GeoCoderInfo geo) => await GetWeatherInfo(geo.Latitude, geo.Longitude);
         private static async Task<string> GetWeatherInfo(double latitude, double longitude)
         {
@@ -158,7 +200,23 @@ namespace WeatherBot
 
             return resultMessage;
         }
+        #endregion
 
+        #region Commands
+        private static DefaultCommand StartCommand => new("start", Do_StartAsync);
+        private static async Task Do_StartAsync(SignedMessageTextUpdate update)
+        {
+            var mm = update.Owner.ResolveService<IMenuManager>();
+
+            // Получаем определённую по id страницу
+            // new StaticPage("main", "Главная", mainBody, mainMenu);
+            var page = mm.GetDefined("main");
+
+            await mm.PushPageAsync(page, update, true);
+        }
+        #endregion
+
+        #region Callbacks
         private static DefaultCallback StartSearching => new("startSearch", "Найти", Do_SearchAsync);
         private static async Task Do_SearchAsync(SignedCallbackUpdate update)
         {
@@ -178,26 +236,49 @@ namespace WeatherBot
         {
             if (update.Sender is BotUser user)
             {
-                user.Favs.Add(args);
+                //user.Favs.Add(args);
+                var geoCodes = update.Owner.ResolveService<IDataManager>().GetSet<GeoCoderInfo>();
+                var code = geoCodes.Find(x => x.Longitude ==  args.Longitude && x.Latitude == args.Latitude);
+                if (code is null)
+                {
+                    code = args;
+                    await geoCodes.AddAsync(code, update);
+                }
+                code.Owners.Add(update.Sender.TelegramId);
+
                 await update.Owner.Bot.EditMessageReplyMarkupAsync(update.ChatId, update.TriggerMessageId, null);
                 await update.Owner.Bot.AnswerCallbackQueryAsync(update.Callback.Id, "Город сохранён в избранное!", showAlert: false);
             }
         }
-        private static BotArgedCallback<IntWrapper> UnfollowGeocode => new(new LabeledData("Удалить", "UnfollowGeocode"), Do_UnfollowGeocodeAsync);
-        private static async Task Do_UnfollowGeocodeAsync(IntWrapper args, SignedCallbackUpdate update)
+        
+        //private static BotArgedCallback<GeoCoderInfo> UnfollowGeocode => new(new LabeledData("Удалить", "UnfollowGeocode"), Do_UnfollowGeocodeAsync);
+        private static TextInputsProcessBase<GeoCoderInfo> RemoveWithUnfollow => new TerminatorProcess<GeoCoderInfo>(IST.Dynamic(), Do_UnfollowGeocodeAsync);
+        private static async Task Do_UnfollowGeocodeAsync(TextInputsArguments<GeoCoderInfo> args, SignedCallbackUpdate update)
         {
-            if (update.Sender is BotUser user)
-            {
-                user.Favs.RemoveAt(args.Value);
+            //if (update.Sender is BotUser user)
+            //{
+            var geoCodes = update.Owner.ResolveService<IDataManager>().GetSet<GeoCoderInfo>();
 
-                var menu = new PairedInlineMenu();
-                menu.Add("Выйти", update.Owner.ResolveService<IMenuManager>().BackCallback);
-                var message = new OutputMessageText(update.Message.Text + $"\n\nГород был удалён!")
+            if (args.CompleteStatus == ProcessCompleteStatus.Success)
+            {
+                //user.Favs.RemoveAt(args.Value);
+                var code = geoCodes.Find(x => x.Longitude == args.BuildingInstance.Longitude && x.Latitude == args.BuildingInstance.Latitude);
+                if (code is not null)
                 {
-                    Menu = menu,
-                };
-                await update.Owner.DeliveryService.ReplyToSender(new EditWrapper(message, update.TriggerMessageId), update);
+                    code.Owners.Remove(update.Sender.TelegramId);
+                    await geoCodes.UpdateAsync(code, update);
+                }
             }
+
+            var resultText = geoCodes.ResolveStatus(args.CompleteStatus, DbActionType.Remove);
+            var menu = new PairedInlineMenu();
+            menu.Add("Выйти", update.Owner.ResolveService<IMenuManager>().BackCallback);
+            var message = new OutputMessageText(update.Message.Text + $"\n\n{resultText}")
+            {
+                Menu = menu,
+            };
+            await update.Owner.DeliveryService.ReplyToSender(new EditWrapper(message, update.TriggerMessageId), update);
+            //}
         }
         private static BotArgedCallback<GeoCoderInfo> OpenFollow => new(new LabeledData("{ Открыть }", "OpenFollow"), Do_OpenFollowAsync);
         private static async Task Do_OpenFollowAsync(GeoCoderInfo args, SignedCallbackUpdate update)
@@ -205,8 +286,8 @@ namespace WeatherBot
             if (update.Sender is BotUser user)
             {
                 var menu = new PairedInlineMenu(update.Owner);
-                menu.Add(UnfollowGeocode, new IntWrapper(user.Favs.FindIndex(x => x.Name == args.Name)));
-                menu.Add(LoadWeather, args);
+                //menu.Add(UnfollowGeocode, args);
+                //menu.Add(LoadWeather, args);
                 menu.Add("Назад", update.Owner.ResolveService<IMenuManager>().BackCallback);
                 var message = new OutputMessageText(args.GetDisplay())
                 {
@@ -215,21 +296,23 @@ namespace WeatherBot
                 await update.Owner.DeliveryService.ReplyToSender(new EditWrapper(message, update.TriggerMessageId), update);
             }
         }
-        private static BotArgedCallback<GeoCoderInfo> LoadWeather => new(new LabeledData("Узнать погоду", "LoadWeather"), Do_LoadWeatherAsync);
-        private static async Task Do_LoadWeatherAsync(GeoCoderInfo args, SignedCallbackUpdate update)
+        private static BotArgedCallback<DtoArg<GeoCoderInfo>> LoadWeather => new(new LabeledData("😮‍💨 Узнать погоду", "LoadWeather"), Do_LoadWeatherAsync);
+        private static async Task Do_LoadWeatherAsync(DtoArg<GeoCoderInfo> args, SignedCallbackUpdate update)
         {
-            if (update.Sender is BotUser user)
+            //if (update.Sender is BotUser user)
+            //{
+            var dm = update.Owner.ResolveService<IDataManager>();
+            var menu = new PairedInlineMenu(update.Owner);
+            menu.Add(dm.RemoveExistingCallback, new ObjInfoArg(dm.GetSet<GeoCoderInfo>(), args.DataId));
+            menu.Add("Назад", update.Owner.ResolveService<IMenuManager>().BackCallback);
+            var message = new OutputMessageText(update.Message.Text + "\n\n" + await GetWeatherInfo(args.GetValue()))
             {
-                var menu = new PairedInlineMenu(update.Owner);
-                menu.Add(UnfollowGeocode, new IntWrapper(user.Favs.FindIndex(x => x.Name == args.Name)));
-                menu.Add("Назад", update.Owner.ResolveService<IMenuManager>().BackCallback);
-                var message = new OutputMessageText(update.Message.Text + "\n\n" + await GetWeatherInfo(args))
-                {
-                    Menu = menu,
-                };
-                await update.Owner.DeliveryService.ReplyToSender(new EditWrapper(message, update.TriggerMessageId), update);
-            }
+                Menu = menu,
+            };
+            await update.Owner.DeliveryService.ReplyToSender(new EditWrapper(message, update.TriggerMessageId), update);
+            //}
         }
+        #endregion
 
         private static DefaultTextInput ExitInput => new("Выйти", Do_ExitInputCityAsync);
         private static async Task Do_ExitInputCityAsync(SignedMessageTextUpdate update)
@@ -294,16 +377,37 @@ namespace WeatherBot
             await update.Owner.DeliveryService.ReplyToSender(message, update);
         }
 
-        private static DefaultCommand StartCommand => new("start", Do_StartAsync);
-        private static async Task Do_StartAsync(SignedMessageTextUpdate update)
+        #region Database
+        private static readonly object locker = new();
+        private static Task<List<T>?> LoadFromJson<T>(string dataName)
         {
-            var mm = update.Owner.ResolveService<IMenuManager>();
+            var filePath = $"resources/database.{dataName}.json";
+            if (!Directory.Exists(new FileInfo(filePath).DirectoryName))
+                Directory.CreateDirectory(new FileInfo(filePath).DirectoryName!);
 
-            // Получаем определённую по id страницу
-            // new StaticPage("main", "Главная", mainBody, mainMenu);
-            var page = mm.GetDefined("main");
-            
-            await mm.PushPageAsync(page, update);
+            lock (locker)
+            {
+                List<T>? res = null;
+                if (File.Exists(filePath))
+                {
+                    string json = File.ReadAllText(filePath);
+                    res = JsonConvert.DeserializeObject<List<T>>(json);
+                }
+                return Task.FromResult(res);
+            }
         }
+        private static Task SaveDataToJson<T>(List<T> data, string dataName)
+        {
+            var filePath = $"resources/database.{dataName}.json";
+            if (!Directory.Exists(new FileInfo(filePath).DirectoryName))
+                Directory.CreateDirectory(new FileInfo(filePath).DirectoryName!);
+            lock (locker)
+            {
+                string json = JsonConvert.SerializeObject(data, Formatting.Indented);
+                File.WriteAllText(filePath, json);
+            }
+            return Task.CompletedTask;
+        }
+        #endregion
     }
 }

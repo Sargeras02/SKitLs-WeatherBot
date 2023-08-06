@@ -25,7 +25,7 @@ namespace WeatherBot.Model
 
             if (update.Sender is BotUser user)
             {
-                foreach (var favorite in user.Favs)
+                foreach (var favorite in user.GetFavorites(update))
                 {
                     res.Add(favorite.Name, OpenCallback, favorite);
                 }
